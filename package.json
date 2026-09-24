@@ -1,0 +1,16 @@
+{
+  "name": "google-calsync",
+  "version": "1.0.0",
+  "private": true,
+  "description": "One-way Microsoft Graph calendar mirror for Google Apps Script",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node test/sync.test.js",
+    "check": "node scripts/check.js",
+    "login": "clasp login",
+    "push": "npm run check && npm test && clasp push",
+    "open": "clasp open-script",
+    "status": "clasp show-file-status"
+  },
+  "devDependencies": { "@google/clasp": "3.4.1" }
+}
