@@ -21,6 +21,7 @@ function getRequiredProperty(key) {
   return value
 }
 const TIMER_FREQ = 15
+const OUTLOOK_TIMEZONE = 'Eastern Standard Time' // Windows tz id; should match appsscript.json timeZone
 const DAYS_TO_SYNC_FROM_TODAY = [-7, 60]
 const IGNORE_EVENT_PATTERNS = [/^Canceled:/, /^Declined:/, /^Lunch$/]
 
@@ -33,7 +34,7 @@ function sync() {
   const maxdate = new Date(Date.now() + DAYS_TO_SYNC_FROM_TODAY[1]*24*60*60*1000)
 
   for (var config of getSyncConfigs()) {
-    console.log(`Syncing Google calendar '${config.gcal}' from ${config.html}`)
+    console.log(`Syncing Google calendar '${config.gcal}' from Outlook`)
     var o365events = fetchOutlookEvents(config.html, mindate, maxdate)
     var gcal = setupGoogleCalendar(config.gcal)
     var gcaltz = retry(function() { return Calendar.Settings.get('timezone').value })

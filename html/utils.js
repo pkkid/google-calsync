@@ -11,13 +11,15 @@ var RETRY_ERRORS = [
 // Creates a Google Calendar Event from the o365event info
 // gcalevent.location = occurance.item.location  // off for now
 function createGoogleCalendarEvent(o365event, gcaltz) {
+  // Outlook returns local times with an offset, e.g. 2026-11-12T00:00:00-05:00.
+  // All-day events start and end at local midnight.
   var start = new Date(o365event.Start)
   var end = new Date(o365event.End)
-  var allday = start.getHours() == 0 && start.getMinutes() == 0
+  var allday = /T00:00:00/.test(o365event.Start) && /T00:00:00/.test(o365event.End)
   var gcalevent = {}
   if (allday) {
-    gcalevent.start = {date:start.toISOString().split('T')[0]}
-    gcalevent.end = {date:end.toISOString().split('T')[0]}
+    gcalevent.start = {date:o365event.Start.split('T')[0]}
+    gcalevent.end = {date:o365event.End.split('T')[0]}
   } else {
     gcalevent.start = {dateTime:start.toISOString(), timeZone:gcaltz}
     gcalevent.end = {dateTime:end.toISOString(), timeZone:gcaltz}
@@ -68,77 +70,87 @@ function fetchGoogleCalendarEvents(gcal) {
 
 
 // Fetch Outlook Events
-// Get existing events and eventids from Outlook
+// Get existing events and eventids from Outlook. Mirrors what the OWA published
+// calendar page does: fetch the session data to learn the calendar folder id,
+// then FindItem against that folder for the date range.
 function fetchOutlookEvents(url, mindate, maxdate) {
-  console.log(`Reading html Outlook calendar ${url}`)
-  var caldata = _getAnonymousCalendarSessionData(url)
-  return _findItem(url, caldata, mindate, maxdate)
+  var service = _outlookServiceUrl(url)
+  console.log('Reading html Outlook calendar')
+  var caldata = _getAnonymousCalendarSessionData(service)
+  var folderid = caldata.Body.CalendarFolder.FolderId.Id
+  return _findItem(service, folderid, mindate, maxdate)
+}
+
+
+// Outlook Service URL
+// Published links look like .../owa/calendar/<a>/<b>/calendar.html (which redirects
+// to .../calendar/published/<a>/<b>/calendar.html). The OWA web app calls its API at
+// https://outlook.office365.com/owa/published/<a>/<b>/service.svc.
+function _outlookServiceUrl(url) {
+  var match = url.match(/^(https:\/\/[^/]+)\/(?:owa\/calendar|calendar\/published|owa\/published)(\/.+)\/calendar\.html/)
+  if (!match) { throw new Error('OUTLOOK_HTML_URL does not look like a published Outlook calendar.html link') }
+  return `${match[1]}/owa/published${match[2]}/service.svc`
+}
+
+
+// Outlook Request
+// POST a JSON request to the OWA service endpoint and return the parsed response.
+function _outlookRequest(service, action, body) {
+  var response = UrlFetchApp.fetch(`${service}?action=${action}&app=PublishedCalendar`, {
+    method: 'post',
+    contentType: 'application/json; charset=utf-8',
+    headers: {action: action},
+    payload: JSON.stringify(body),
+    muteHttpExceptions: true,
+  })
+  var code = response.getResponseCode()
+  if (code != 200) { throw new Error(`Outlook ${action} failed with HTTP ${code}`) }
+  return JSON.parse(response.getContentText())
+}
+
+
+// Outlook Request Header
+// Standard Exchange JSON header. Times come back in OUTLOOK_TIMEZONE.
+function _outlookHeader() {
+  return {"__type": "JsonRequestHeaders:#Exchange",
+    "RequestServerVersion": "V2018_01_08",
+    "TimeZoneContext": {"__type": "TimeZoneContext:#Exchange",
+      "TimeZoneDefinition": {"__type": "TimeZoneDefinitionType:#Exchange",
+        "Id": OUTLOOK_TIMEZONE
+  }}}
 }
 
 
 // Get Anonymous Calendar Session Data
-// Fetch Outlook calendar data from the html url
-function _getAnonymousCalendarSessionData(url) {
-    var headers = {
-      'action': 'GetAnonymousCalendarSessionData',
-      'cookie': 'ClientId=7D441659E2204FF2A86A7C6DD0BF04C6; OIDC=1; MSFPC=GUID=fcdcbf52a53a4c209a774984e4babe1a&HASH=fcdc&LV=202512&V=4&LU=1764688053765',
-      'origin': 'https://outlook.office365.com',
-      'x-owa-canary': 'X-OWA-CANARY_cookie_is_null_or_empty',
-      'x-owa-hosted-ux': 'false',
-      'x-client-version': '20260724003.16',
-      'x-req-source': 'PublishedCalendar',
-      'x-owa-sessionid': '3197d5be-39f8-4deb-87c0-cdce7db33b6d',
-      'x-owa-correlationid': '4ebfa929-4c6a-d6ea-78d2-f69a098de051',
-      'x-owa-actionsource': 'GetAnonymousCalendarSessionData',
-      'x-owa-urlpostdata': encodeURIComponent(JSON.stringify({
-        "__type": "GetAnonymousCalendarSessionDataJsonRequest:#Exchange",
-        "Header": {"__type": "JsonRequestHeaders:#Exchange",
-          "RequestServerVersion": "V2018_01_08",
-          "TimeZoneContext": {"__type": "TimeZoneContext:#Exchange",
-            "TimeZoneDefinition": {"__type": "TimeZoneDefinitionType:#Exchange",
-              "Id":"Pacific Standard Time"
-      }}}}))
-    }
-    url = url.replace('/calendar/published/', '/owa/calendar/')
-    url = url.replace('/calendar.html', '/service.svc')
-    url = url + '?action=GetAnonymousCalendarSessionData&app=PublishedCalendar&n=0'
-    console.log(`Fetching Outlook calendar data ${url}`)
-    var response = UrlFetchApp.fetch(url, {validateHttpsCertificates:false , headers:headers, muteHttpExceptions:true})
-    console.log(response.getContentText())
-    return JSON.parse(response.getContentText())
+// Returns the published calendar's session data (includes the calendar folder id)
+function _getAnonymousCalendarSessionData(service) {
+  return _outlookRequest(service, 'GetAnonymousCalendarSessionData', {
+    "__type": "GetAnonymousCalendarSessionDataJsonRequest:#Exchange",
+    "Header": _outlookHeader(),
+  })
 }
 
 
 // Find Item
 // Fetch Outlook calendar events between mindate and maxdate
-function _findItem(url, caldata, mindate, maxdate) {
-  var dateformat = '%Y-%m-%dT00:00:00.000'
-  var headers = {
-    'action': 'FindItem',
-    'x-owa-urlpostdata': encodeURIComponent(JSON.stringify({
-      "__type": "FindItemJsonRequest:#Exchange",
-      "Header": {"__type": "JsonRequestHeaders:#Exchange",
-        "RequestServerVersion": "Exchange2015",
-        "TimeZoneContext": {"__type": "TimeZoneContext:#Exchange",
-          "TimeZoneDefinition": {"__type": "TimeZoneDefinitionType:#Exchange",
-          "Id":"Pacific Standard Time"
-      }}},
-      "Body": {"__type": "FindItemRequest:#Exchange",
-        "ParentFolderIds": [{"__type":"FolderId:#Exchange", "Id":"{folderid}"}],
-        "ItemShape": {"__type": "ItemResponseShape:#Exchange", "BaseShape": "IdOnly"},
-        "Traversal": "Shallow",
-        "Paging": {"__type":"CalendarPageView:#Exchange",
-          "StartDate": `${mindate.toISOString()}`,
-          "EndDate": `${maxdate.toISOString()}`
-      }}
-    }))
-  }
-  url = url.replace('/calendar/published/', '/owa/calendar/')
-  url = url.replace('/calendar.html', '/service.svc')
-  console.log(`Fetching Outlook calendar events ${url}`)
-  var response = UrlFetchApp.fetch(url, {method:'POST', validateHttpsCertificates:false , headers:headers, muteHttpExceptions:true})
-  var data = JSON.parse(response.getContentText())
-  return data.Body.ResponseMessages.Items[0].RootFolder.Items || []
+function _findItem(service, folderid, mindate, maxdate) {
+  var data = _outlookRequest(service, 'FindItem', {
+    "__type": "FindItemJsonRequest:#Exchange",
+    "Header": _outlookHeader(),
+    "Body": {"__type": "FindItemRequest:#Exchange",
+      "ParentFolderIds": [{"__type": "FolderId:#Exchange", "Id": folderid}],
+      "ItemShape": {"__type": "ItemResponseShape:#Exchange", "BaseShape": "IdOnly"},
+      "Traversal": "Shallow",
+      "Paging": {"__type": "CalendarPageView:#Exchange",
+        "StartDate": mindate.toISOString(),
+        "EndDate": maxdate.toISOString(),
+    }}
+  })
+  var message = data.Body.ResponseMessages.Items[0]
+  if (message.ResponseClass != 'Success') { throw new Error(`Outlook FindItem failed: ${message.ResponseCode} ${message.MessageText || ''}`) }
+  var items = message.RootFolder.Items || []
+  console.log(`Found ${items.length} Outlook events`)
+  return items
 }
 
 
