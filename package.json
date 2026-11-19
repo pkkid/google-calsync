@@ -1,16 +1,22 @@
 {
   "name": "google-calsync",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "One-way Microsoft Graph calendar mirror for Google Apps Script",
+  "description": "Outlook to Google Calendar sync scripts for Google Apps Script (HTML, iCal, and Graph variants)",
   "engines": { "node": ">=22" },
   "scripts": {
-    "test": "node test/sync.test.js",
-    "check": "node scripts/check.js",
     "login": "clasp login",
-    "push": "npm run check && npm test && clasp push",
-    "open": "clasp open-script",
-    "status": "clasp show-file-status"
+    "check": "node scripts/check.js html ical && cd graph && node scripts/check.js",
+    "status:html": "cd html && clasp show-file-status",
+    "status:ical": "cd ical && clasp show-file-status",
+    "pull:html": "cd html && clasp pull",
+    "pull:ical": "cd ical && clasp pull",
+    "push:html": "node scripts/check.js html && cd html && clasp push",
+    "push:ical": "node scripts/check.js ical && cd ical && clasp push",
+    "open:html": "cd html && clasp open-script",
+    "open:ical": "cd ical && clasp open-script",
+    "test:graph": "cd graph && node test/sync.test.js",
+    "push:graph": "cd graph && node scripts/check.js && node test/sync.test.js && clasp push"
   },
   "devDependencies": { "@google/clasp": "3.4.1" }
 }
